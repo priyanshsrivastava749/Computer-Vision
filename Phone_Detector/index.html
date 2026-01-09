@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phone Detector AI</title>
+    <!-- Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
+    <style>
+        :root {
+            --primary: #00f2ea;
+            --secondary: #ff0050;
+            --bg: #0f172a;
+            --surface: #1e293b;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: var(--bg);
+            color: white;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .container {
+            position: relative;
+            width: 90%;
+            max-width: 800px;
+            aspect-ratio: 16/9;
+            background: #000;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 0 50px rgba(0, 242, 234, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        video,
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        video {
+            display: block;
+            /* Ensure video is visible underneath canvas */
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(10px);
+            padding: 15px 25px;
+            border-radius: 50px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            width: max-content;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.2rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background: #ff0050;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #ff0050;
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.active {
+            background: #00f2ea;
+            box-shadow: 0 0 10px #00f2ea;
+        }
+
+        .overlay-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 40px;
+            border-radius: 20px;
+            pointer-events: auto;
+            backdrop-filter: blur(10px);
+            z-index: 20;
+        }
+
+        .overlay-message.hidden {
+            display: none;
+        }
+
+        button {
+            background: linear-gradient(135deg, var(--primary), #00a8a3);
+            border: none;
+            padding: 15px 40px;
+            border-radius: 50px;
+            color: #000;
+            font-weight: 700;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(0, 242, 234, 0.4);
+        }
+
+        .alert-box {
+            background: rgba(255, 0, 80, 0.2);
+            border: 1px solid var(--secondary);
+            color: var(--secondary);
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s ease;
+        }
+
+        .alert-box.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <video id="webcam" playsinline muted autoplay></video>
+        <canvas id="output"></canvas>
+
+        <div class="ui-layer">
+            <div class="header">
+                <h1>
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">System Offline</span>
+                </h1>
+            </div>
+
+            <div style="display: flex; justify-content: center;">
+                <div id="detectionAlert" class="alert-box">
+                    PHONE DETECTED
+                </div>
+            </div>
+        </div>
+
+        <div id="startInfo" class="overlay-message">
+            <h2>Phone Detector AI</h2>
+            <p style="color: #94a3b8; margin-bottom: 30px;">
+                Allow camera access to detect phones in real-time.<br>
+                Audio will play when a phone is seen.
+            </p>
+            <button id="startBtn">Initialize System</button>
+            <p id="loadingText" style="margin-top: 15px; color: var(--primary); display: none;">Loading Models...</p>
+        </div>
+    </div>
+
+    <!-- Audio Element -->
+    <audio id="alertSound" src="assets/1.mp3" preload="auto"></audio>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('output');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startBtn');
+        const startInfo = document.getElementById('startInfo');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const detectionAlert = document.getElementById('detectionAlert');
+        const loadingText = document.getElementById('loadingText');
+        const audio = document.getElementById('alertSound');
+
+        let model = null;
+        let isRunning = false;
+        let audioCooldown = false;
+
+        startBtn.addEventListener('click', startApp);
+
+        async function startApp() {
+            startBtn.style.display = 'none';
+            loadingText.style.display = 'block';
+            statusText.innerText = "Loading AI Core...";
+
+            try {
+                // Initialize Audio Context (needed for some browsers)
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                const audioCtx = new AudioContext();
+                audioCtx.resume();
+                
+                // Warm up the audio element to bypass autoplay policy
+                audio.play().then(() => {
+                    audio.pause();
+                    audio.currentTime = 0;
+                }).catch(e => console.log("Audio warmup failed:", e));
+
+                // Load TF Model
+                model = await cocoSsd.load();
+                console.log("Model loaded");
+
+                // Start WebCam
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1280, height: 720, facingMode: 'user' },
+                    audio: false
+                });
+
+                video.srcObject = stream;
+
+                video.onloadedmetadata = () => {
+                    video.play();
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    startInfo.classList.add('hidden');
+
+                    isRunning = true;
+                    statusText.innerText = "System Active | Scanning...";
+                    statusDot.classList.add('active');
+
+                    detectFrame();
+                };
+
+            } catch (err) {
+                console.error(err);
+                alert("Error: " + err.message + "\nMake sure you allowed camera access and are using HTTPS or localhost.");
+                statusText.innerText = "Initialization Failed";
+                loadingText.style.display = 'none';
+                startBtn.style.display = 'block';
+            }
+        }
+
+        async function detectFrame() {
+            if (!isRunning) return;
+
+            // Detect objects: max 20 objects, min confidence 0.25 (to catch more poses)
+            const predictions = await model.detect(video, 20, 0.25);
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            let phoneFound = false;
+
+            predictions.forEach(prediction => {
+                const [x, y, width, height] = prediction.bbox;
+                const isPhone = prediction.class === 'cell phone';
+
+                // Style based on detection type
+                ctx.strokeStyle = isPhone ? '#00f2ea' : 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = isPhone ? 4 : 2;
+                ctx.strokeRect(x, y, width, height);
+
+                // Draw Label
+                ctx.fillStyle = isPhone ? '#00f2ea' : 'rgba(255, 255, 255, 0.3)';
+                if (isPhone) {
+                    ctx.fillStyle = "rgba(0, 242, 234, 0.2)";
+                    ctx.fillRect(x, y, width, height);
+                }
+
+                if (isPhone) {
+                    phoneFound = true;
+                }
+            });
+
+            handleAlert(phoneFound);
+
+            requestAnimationFrame(detectFrame);
+        }
+
+        function handleAlert(detected) {
+            if (detected) {
+                detectionAlert.classList.add('visible');
+
+                // Audio Logic: Play full track if not already playing
+                if (audio.paused) {
+                    console.log("Phone detected, starting audio...");
+                    audio.play().catch(e => console.log("Audio play failed:", e));
+                }
+            } else {
+                detectionAlert.classList.remove('visible');
+            }
+        }
+    </script>
+</body>
+
+</html>
